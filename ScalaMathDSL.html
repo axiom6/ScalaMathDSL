@@ -1,0 +1,1018 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <title>A DSL for Symbolic Mathematics in Scala</title>
+  <meta charset="utf-8">
+  <meta name="description" content="GIS with Leaflet">
+  <meta name="author" content="Tom Flaherty">
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+  <link rel="stylesheet" href="reveal/css/reveal.css">
+  <link rel="stylesheet" href="reveal/css/theme/default.css" id="theme">
+  <link rel="stylesheet" href="reveal/lib/css/zenburn.css">
+  <style>
+    .reveal pre {
+      box-shadow: 0 0 6px rgba(0, 0, 0, 0.3);
+      display: block; font-family: monospace; font-size: 0.75em; line-height: 1.2em;
+      position: relative; left: -10%; width:120%; margin-top:2%; margin-bottom:2%;
+      text-align: left; word-wrap: break-word; }
+    .reveal h1, .reveal h2, .reveal h3, .reveal h4, .reveal h5, .reveal h6 {
+      text-transform: none; }
+    .reveal table
+      { text-align: center; margin-left:auto; margin-right:auto;  }
+    .reveal table th {
+      text-align: center; padding-top:.5em; color:tan; text-shadow:none; }
+    .reveal table td {
+      text-align: center; }
+    .trait  td {
+      text-align: left!important; } /*  font-family:monospace!important; */
+  </style>
+
+</head>
+
+<body>
+
+<div class="reveal">
+
+<!-- Any section element inside of this container is displayed as a slide -->
+<div class="slides">
+
+<section>
+  <h1>A DSL for Symbolic Mathematics in Scala</h1>
+  <p>
+    <small><a href="http://twitter.com/TheTomFlaherty">@TheTomFlaherty</a></small>
+  </p>
+</section>
+
+
+<section>
+  <img src="img/Approach.png" alt="Basic Approach"/>
+</section>
+
+
+<section>
+  <h3>Exp - Base Math Expression with Internal DSL</h3>
+<pre class="scala"><code style="font-size:1em; min-height:23em;">
+sealed abstract class Exp extends with Calculate with Differentiate
+{
+// Wrap i:Int and d:Double to Num(d) & String to Var(s)
+   implicit def int2Exp( i:Int    ) : Exp = Num(i.toDouble)
+   implicit def dbl2Exp( d:Double ) : Exp = Num(d)
+   implicit def str2Exp( s:String ) : Exp = Var(s)
+
+// Infix operators from high to low using Scala precedence
+   def ~^ ( v:Exp ) : Exp = Pow(this,v) // ~^ high precedence
+   def /  ( v:Exp ) : Exp = Div(this,v)
+   def *  ( v:Exp ) : Exp = Mul(this,v)
+   def -  ( v:Exp ) : Exp = Sub(this,v)
+   def +  ( v:Exp ) : Exp = Add(this,v)
+
+// Prefix operator for negation
+   def unary_- : Exp = Neg(this)
+}
+</code></pre>
+</section>
+
+<section>
+  <h4>Case Classes for Algebric Expressions plus Differentiate</h4>
+<pre class="scala"><code style="font-size:1.2em; min-height:11em;">
+case class Num( n:double )     extends Exp // wrap double
+case class Var( s:String )     extends Exp // wrap String
+case class Par( u:Exp )        extends Exp // parentheses
+case class Neg( u:Exp )        extends Exp // -u prefix
+case class Pow( u:Exp, v:Exp ) extends Exp // u ^ v infix
+case class Mul( u:Exp, v:Exp ) extends Exp // u * v infix
+case class Div( u:Exp, v:Exp ) extends Exp // u / v infix
+case class Add( u:Exp, v:Exp ) extends Exp // u + v infix
+case class Sub( u:Exp, v:Exp ) extends Exp // u – v infix
+case class Dif( u:Exp )        extends Exp // Differentiate
+</code></pre>
+</section>
+
+<section>
+  <!--h4>Algebric Parser - External DSL</h4-->
+<pre class="scala"><code style="font-size:.9em; min-height:29em; min-width:45em;">object Parse extends StdTokenParsers
+{
+  val lexical = new StdLexical;  type Tokens = StdLexical
+  lexical.delimiters ++= List( "(",")","+","-","^","/","*" )
+
+  def NUM:Parser[Exp] = numericLit        ^^ { (s:String) => Num(s.toDouble)}
+  def VAR:Parser[Exp] = ident             ^^ { (s:String)   => Var(s) }
+  def par:Parser[Exp] = "(" ~> exp <~ ")" ^^ { (u:Exp)      => Par(u) }
+  def neg:Parser[Exp] = "-" ~  exp        ^^ { case "-" ~ u => Neg(u)}
+
+  def beg:Parser[Exp] = NUM | VAR | par | neg
+  def pow:Parser[Exp] = beg * ( "^" ^^^ { (u:Exp,v:Exp) => Pow(u,v) } )
+  def mul:Parser[Exp] = pow * ( "*" ^^^ { (u:Exp,v:Exp) => Mul(u,v) } )
+  def div:Parser[Exp] = mul * ( "/" ^^^ { (u:Exp,v:Exp) => Div(u,v) } )
+  def add:Parser[Exp] = div * ( "+" ^^^ { (u:Exp,v:Exp) => Add(u,v) } )
+  def sub:Parser[Exp] = add * ( "-" ^^^ { (u:Exp,v:Exp) => Sub(u,v) } )
+  def dif:Parser[Exp] = "d" ~ sub   ^^  { case "d" ~ u  => Dif(u)   }
+  def end:Parser[Exp] = dif | failure("end")
+
+  def apply( str:String ) : Exp = parse( str )
+  def parse( str:String ) : Exp = { … } }
+</code></pre>
+</section>
+
+<section>
+    <h4>A Taste of Differential Calculus with Pattern Matching and an Internal DSL</h4>
+<pre class="scala"><code style="font-size:1em; min-height:24em">
+trait Differentiate
+{
+  this:Exp => // Makes Differentiate aware of Exp for Internal DSL
+
+  def d( e:Exp ) : Exp = e match
+  {
+    case Num(n)   => 0           // diff of constant zero
+    case Var(s)   => Dif(Var(s)) // "x" becomes dx
+    case Par(u)   => Par(d(u))
+    case Neg(u)   => -d(u)
+    case Pow(u,v) => v * u~^(v-1) * d(u)
+    case Mul(u,v) => v * d(u) + u * d(v)
+    case Div(u,v) => Par( v*d(u) - u*d(v) ) / v~^2
+    case Add(u,v) => d(u) + d(v)
+    case Sub(u,v) => d(u) - d(v)
+    case Dif(u)   => Dif(d(u))   // 2rd dif
+  }
+}
+</code></pre>
+</section>
+
+<section>
+  <table>
+    <caption>Scala Concepts So Far</caption>
+    <tr><th>Internal DSLs</th><th>Case Classes</th></tr>
+    <tr><td>Implicits</td><td>Algebraic Data Type</td></tr>
+    <tr><td>Operators</td><td>Abstract Syntax Tree</td></tr>
+    <tr><th>Parsing</th><th>Pattern Matching</th></tr>
+    <tr><td>Lexical</td><td>Extraction</td></tr>
+    <tr><td>Grammar</td><td>Recursion</td></tr>
+  </table>
+</section>
+
+<section>
+    <div style="color:tan;">Implicits</div>
+    <ul>
+      <li>Problem:  Have a basic type and need to use it in a new context</li>
+      <li>Solution: Implicit conversion to wrap it into case class</li>
+    </ul>
+<pre class="scala"><code style="font-size:1em;">
+// Wrap i:Int and d:Double to Num(d) & String to Var(s)
+implicit def int2Exp( i:Int    ) : Exp = Num(i.toDouble)
+implicit def dbl2Exp( d:Double ) : Exp = Num(d)
+implicit def str2Exp( s:String ) : Exp = Var(s)
+
+</code></pre>
+</section>
+
+<section>
+  <div style="color:tan;">Operators</div>
+  <div>Precendence</div>
+  <div>letters | ^ &  <>  =! : +- */% ~ special unicode</div>
+</section>
+
+<section>
+  <div style="color:tan;">Case Class Expands a Class into an ADT</div>
+<pre class="scala"><code style="font-size:1em; min-height:24em">
+// Scala expands the case class Add( u:Exp, v:Exp ) to:
+class Add( val u:Exp, val v:Exp ) // Values immutable
+{
+  def toString : String  = {..} // Class and field name
+  def equals   : Boolean = {..} // Fields compared structurally
+  def hashCode : Int     = {..} // hashCode from fields
+}
+
+// Scala creates a companion object with apply and unapply
+object Add
+{
+  def apply(   u:Exp, v:Exp ) : Add = new Add(u,v)
+  def unapply( u:Exp, v:Exp ) : Option[(Exp,Exp)] = Some(u,v)
+}
+</code></pre>
+</section>
+
+<section>
+  <img src="img/AST.png" alt="Abstract Syntax Tree"/>
+</section>
+
+<section>
+  <div style="color:tan;">Nested Case Classes are the Core Language</div>
+<pre class="scala"><code style="font-size:1em; min-height:24em">
+trait Differentiate
+{
+  this:Exp =>
+
+  def d( e:Exp ) : Exp = e match
+  {
+    case Num(n)   => Num(0)       // diff of constant zero
+    case Var(s)   => Dif(Var(s))  // x becomes dx
+    case Par(u)   => Par(d(u))
+    case Neg(u)   => Neg(d(u))
+    case Pow(u,v) => Mul(Mul(v,Pow(u),Sub(v,1)),d(u))
+    case Mul(u,v) => Mul(Add(Mul(v,d(u))),u),d(v))
+    case Div(u,v) => Div(Sub(Mul(v,d(u)),Mul(u,d(v)) ),Pow(v,2))
+    case Add(u,v) => Add(d(u),d(v))
+    case Sub(u,v) => Sub(d(u),d(v))
+    case Dif(u)   => Dif(d(u))      // 2rd dif
+  }
+}
+</code></pre>
+</section>
+
+<section>
+  <!--div style="color:tan;">JSON Parser</div-->
+<table>
+<tr><td><pre class="scala"><code style="font-size:.9em; min-height:11em">start = obj | array
+obj   = "{" pair  ("," pair )* "}"
+array = "[" value ("," value)* "]"
+pair  = str ":" value // Name value
+str   = StringLit
+num   = NumericLit
+value = obj|array|str|num|
+        "true"|"false"|"null"
+</code></pre></td>
+<td><pre class="scala"><code style="font-size:.9em; min-height:9em; max-height:11em; line-height:1.1em;">P ~ Q        sequential composition
+~> <~        sequential ignore
+P | Q        alternative
+opt(P)       optional   ? (zero or one )
+rep(P)       repetition * (zero or more)
+rep1(P)      repetition + (one  or more)
+repsep(P,Q)  interleaved repetition *
+repsep1(P,Q) interleaved repetition +
+P^^F(R)      apply closure F to result
+RP^^^        conversion
+</code></pre></td></tr>
+</table>
+<pre class="scala" style="margin-top:0;"><code style="font-size:.9em; min-height:16em; line-height:1.1em;">class JSONParser extends StdTokenParsers with ImplicitConversions
+{
+  val lex = new Lexer
+  lex.reserved   ++= List( "true", "false", "null" ) // Keywords
+  lex.delimiters ++= List( "{", "}", "[", "]", ":", "," )
+  def start = obj | array
+  def obj   = "{" ~> repsep( pair,  "," ) <~ "}"
+  def array = "[" ~> repsep( value, "," ) <~ "]"
+  def pair  = str ~ (":" ~> value) ^^ { case s ~ v => (s,v) }
+  def str   = accept("string", { case lex.StringLit(s) => s } )
+  def num   = accept("number", { case lex.NumericLit(n)=> n.toDouble })
+  def value : Parser[Any] = obj | arr | str | num |
+              "true"^^^true | "false"^^^false | "null"^^^null
+}
+</code></pre>
+</section>
+
+<!--section>
+  <div style="color:tan;">Pattern Matching</div>
+  <div>Extraction</div>
+  <div>Recursion</div>
+</section-->
+
+<section>
+  <div style="color:tan;">Patterns can Match Anything</div>
+<pre class="scala"><code style="font-size:.95em; min-height:24em">
+def matchAny( any:Any ) : String = any match
+{
+  case Add(u,v)   => u.toString + " + " + v.toString // Case class
+  case 1                  => “one”                   // Constant
+  case i:Int              => i.toString              // By type
+  case d:Double if d>12.0 => d.toString              // With  a guard
+  case (i:Int,j:Int)      => (i+j).toString          // A tuple of 2 ints
+  case (x,y)              => x.toString + y.toString // A tuple of 2 anys
+  case &lt;tag&gt;{ t }&lt;/tag&gt;   => t.toString              // scala.xml.Node
+  case head :: tail       => head.toString           // any is a List
+  case _                  => “no match”
+}
+</code></pre>
+</section>
+
+<section>
+<div style="color:tan;">Pattern Match for Calculation</div>
+<pre class="scala"><code style="font-size:1em; min-height:25em">
+trait Calculate
+{
+  this:Exp =>
+  val NaN : Double = Math.NaN_DOUBLE
+  type Assign = (String) => Double // { “a”=>3.0, “b”=>6.0 }
+
+  def calc( e:Exp, a:Assign ) : Double = e match // No Internal DSL
+  {
+    case Num(d)   => d          // Unwrap the double
+    case Var(s)   => a(s)       // Return double assigned to variable
+    case Par(u)   =>  calc(u,a)
+    case Neg(u)   => -calc(u,a)
+    case Pow(u,v) => Math.pow( calc(u,a), calc(v,a) )
+    case Mul(u,v) => calc(u,a) * calc(v,a)
+    case Div(u,v) => val de=calc(v,a) if de==0.0 NaN else calc(u,a)/de
+    case Add(u,v) => calc(u,a) + calc(v,a)
+    case Sub(u,v) => calc(u,a) - calc(v,a)
+    case Dif(u)   => NaN
+  }
+}
+</code></pre>
+</section>
+
+<section>
+  <h2>Time to Go Off the Deep End</h2>
+</section>
+
+<section>
+  <div style="color:tan;">An Expanded Math Expression Exp</div>
+<pre class="scala"><code style="font-size:.9em; min-height:32em; line-height:1.1em;">abstract class Exp extends
+  Ascii     with Lambda        with MathML    with Latex   with
+  Calculate with Differentiate with Integrate with Simplify
+{
+  implicit def Int2Num( n:Int    ) : Exp = Num(n)
+  implicit def dbl2Dbl( r:Double ) : Exp = Dbl(r)
+  implicit def str2Var( s:String ) : Exp = Var(s)
+  // ... arithmetic operators from low to high precedence ....
+  def equ ( v:Exp ) : Exp = Equ(this,v)
+  def +   ( v:Exp ) : Exp = Add(this,v)
+  def -   ( v:Exp ) : Exp = Sub(this,v)
+  def *   ( v:Exp ) : Exp = Mul(this,v)
+  def /   ( v:Exp ) : Exp = Div(this,v)
+  def ~^  ( v:Exp ) : Exp = Pow(this,v) // ~^ for  precedence
+  def unary_-       : Exp = Neg(this)
+
+  def noparen( e:Exp ) : Exp = e match {
+    case Par(u)   => noparen(u)
+    case Brc(u)   => noparen(u)
+    case Mul(u,v) => Mul(noparen(u),noparen(v))
+    case Div(u,v) => Div(noparen(u),noparen(v))
+    case _        => e }
+  def noparen : Exp = noparen(this)
+  def text:Text = { val t = Text(50); ascii(t,this); t }
+  override def toString : String = text.toString }
+</code></pre>
+</section>
+
+<section>
+  <div style="color:tan;">Additional Math Case Classes</div>
+<pre class="scala"><code style="font-size:.9em; min-height:26em; line-height:1.1em;">// Numbers and Variables
+   case class Num( n:Int )          extends Exp // n Int
+   case class Dbl( r:Double )       extends Exp // r Double
+   case class Rat( n:Int, r:Int )   extends Exp // n / r
+   case class Var( s:String )       extends Exp // s String
+
+// Binary Operators from lowest to highest precedence
+   case class Equ( u:Exp, v:Exp ) extends Exp // u = v  Equation
+   case class Add( u:Exp, v:Exp ) extends Exp // u + v
+   case class Sub( u:Exp, v:Exp ) extends Exp // u - v
+   case class Mul( u:Exp, v:Exp ) extends Exp // u * v
+   case class Div( u:Exp, v:Exp ) extends Exp // u / v
+   case class Pow( u:Exp, v:Exp ) extends Exp // u ^ v
+
+// Unary operator high precendence
+   case class Neg( u:Exp )        extends Exp // -u
+   case class Rec( u:Exp )        extends Exp // 1 / u
+
+// Parenthesis Braces and Absolute Value
+   case class Par( u:Exp )        extends Exp // (u)
+   case class Brc( u:Exp )        extends Exp // {u}
+   case class Abs( u:Exp )        extends Exp // |u|
+
+</code></pre>
+</section>
+
+<section>
+  <div style="color:tan;">Transcendental Trigonometry and Calculus</div>
+<pre class="scala"><code style="font-size:.9em; min-height:27em; line-height:1.1em;">
+// Natural Log, Log Base, Root, Square Root and e
+   case class Lnn( u:Exp )         extends Exp // ln(u)
+   case class Log( u:Exp, r:Dbl )  extends Exp // log_b(u)
+   case class Roo( u:Exp, r:Dbl )  extends Exp // root_b(u)
+   case class Sqt( u:Exp )         extends Exp // sqrt(u)
+   case class Eee( u:Exp )         extends Exp // e^u
+
+// Trigometric                          // Inverse Trigometric
+   case class Sin( u:Exp ) extends Exp;    case class ASin( u:Exp ) extends Exp
+   case class Cos( u:Exp ) extends Exp;    case class ACos( u:Exp ) extends Exp
+   case class Tan( u:Exp ) extends Exp;    case class ATan( u:Exp ) extends Exp
+   case class Sec( u:Exp ) extends Exp;    case class ASec( u:Exp ) extends Exp
+   case class Csc( u:Exp ) extends Exp;    case class ACsc( u:Exp ) extends Exp
+   case class Cot( u:Exp ) extends Exp;    case class ACot( u:Exp ) extends Exp
+
+// Differentiation, Limits, Integration, Summation and Integration with Lim
+   case class Dif( u:Exp )        extends Exp // d(u)   Differentiate
+   case class Lim( a:Exp, b:Exp ) extends Exp // _a^b limits for Sum and Int
+   case class Itg( u:Exp )        extends Exp // itg(u) Intergrate
+   case class Sum( a:Exp, b:Exp, u:Exp ) extends Exp
+   case class Itl( a:Exp, b:Exp, u:Exp ) extends Exp
+
+</code></pre>
+</section>
+
+<section>
+  <div style="color:tan;">Linear Algebra, Complex and Miscellaneous</div>
+<pre class="scala"><code style="font-size:.9em; min-height:27em; line-height:1.1em;">
+// Linear Algebra - Vector Matrix
+   case class Vex(   a:Array[Exp] ) extends Exp  { ... }
+   case class Mex( mat:Array[Vex] ) extends Exp  { ... }
+
+// Complex Number
+   case class Cex( r:Exp, i:Exp  )  extends Exp  { ... }
+
+// Miscellaneous - Subscript Superscipt Simplify Not
+   case class Sus( u:Exp, v:Exp ) extends Exp // x_1 Subscript
+   case class Sup( u:Exp, v:Exp ) extends Exp // x^1 Superscript
+   case class Not( u:Exp )        extends Exp // Expression not intergrated
+   case class Sim( u:Exp )        extends Exp // Simplify placeholder
+   case class Msg( m:Text )       extends Exp // Error messages from Parsing
+</code></pre>
+</section>
+
+<section>
+  <div style="color:tan;">Ascii Math</div>
+  <table style="font-size:20pt;">
+    <tbody>
+      <tr><th style="width:50em;">Text String</th><th>MathML</th></tr>
+      <tr><td>x^2+y_1+z_12^34</td><td>`x^2+y_1+z_12^34`</td></tr>
+      <tr><td>arcsin(x)</td><td>`sin^-1(x)`</td></tr>
+      <tr><td>d/dxf(x) = lim_(h-&gt;0)(f(x+h)-f(x))/h</td><td>`d/dxf(x) = lim_(h-&gt;0)(f(x+h)-f(x))/h`</td></tr>
+      <tr><td>f(x) = sum_(n=0)^oo (f^((n))(a))/(n!)(x-a)^n</td><td>`f(x) = sum_(n=0)^oo (f^((n))(a))/(n!)(x-a)^n`</td></tr>
+      <tr><td>int_0^1f(x)dx</td><td>`int_0^1f(x)dx`</td></tr>
+      <tr><td>[[a,b],[c,d]]</td><td>`[[a,b],[c,d]]`</td></tr>
+      <tr><td>sqrt sqrt root3x</td><td>`sqrt sqrt root3x`</td></tr>
+    </tbody>
+  </table>
+
+</section>
+
+<section>
+<div style="color:tan;">Ascii Parse 151 Lines</div>
+<pre class="scala"><code style="font-size:.9em; min-height:26em; line-height:1.1em;">
+package math.parse
+import  math.util.Text
+import  math.exp._
+import  scala.util.parsing.combinator.lexical.StdLexical
+import  scala.util.parsing.combinator.syntactical.StdTokenParsers
+
+object AsciiParse extends StdTokenParsers
+{
+  type Tokens = StdLexical
+
+  val lexical = new StdLexical
+
+  lexical.delimiters ++=
+    List( "(",")","[","]","{","}","|",",","+","-","^","/","*","_","=","." )
+
+  lexical.reserved   +=
+  (
+    "d", "e", "i", "root","sum","Int",
+    "sqrt","ln","log","sin","cos","tan","cot","sec","csc",
+    "arcsin","arccos","arctan","arccot","arcsec","arccsc"
+  )
+
+  // Parse Numbers and Variables
+  def NUM : Parser[Num] = numericLit ^^ { (s:String) => Num(s.toInt)    }
+  def DBL : Parser[Dbl] = numericLit ^^ { (s:String) => Dbl(s.toDouble) }
+  def VAR : Parser[Exp] = ident      ^^ { (s:String) => variable(s)     }
+
+  def variable( s:String ) : Exp =
+  {
+    if( s.charAt(0)=='d' && s.length==2 )  // Special case where Dif d
+       Dif(Var(s.charAt(1).toString))       // is split from a variable
+    else
+      Var(s)
+  }
+
+  // ... Binary pass through parsers from high to low precedence
+  def beg : Parser[Exp] = base | oper
+  def pow : Parser[Exp] = beg * ( "^" ^^^ { (u:Exp,v:Exp) => Pow(u,v) } )
+  def mul : Parser[Exp] = pow * ( "*" ^^^ { (u:Exp,v:Exp) => Mul(u,v) } )
+  def div : Parser[Exp] = mul * ( "/" ^^^ { (u:Exp,v:Exp) => Div(u,v) } )
+  def add : Parser[Exp] = div * ( "+" ^^^ { (u:Exp,v:Exp) => Add(u,v) } )
+  def sub : Parser[Exp] = add * ( "-" ^^^ { (u:Exp,v:Exp) => Sub(u,v) } )
+  def equ : Parser[Exp] = sub * ( "=" ^^^ { (u:Exp,v:Exp) => Equ(u,v) } )
+  def end : Parser[Exp] = equ
+
+  // ... Grouping ...
+  def par : Parser[Exp] = "(" ~> end <~ ")"  ^^ { (u:Exp) => Par(u) }
+  def brc : Parser[Exp] = "{" ~> end <~ "}"  ^^ { (u:Exp) => Brc(u) }
+  def abs : Parser[Exp] = "|" ~> end <~ "|"  ^^ { (u:Exp) => Abs(u) }
+
+  // ... cex vex mex ...
+  def iii : Parser[Exp] = "i" ^^ { case "i" => Var("i") }
+  def cex : Parser[Exp] = "[" ~> end ~ "," ~ end <~ "." <~ "i"  <~ "]" ^^
+    { case u ~ "," ~ v => new Cex(u,v) }
+
+  def vel : Parser[List[Exp]] = repsep(end, ",")
+  def vex : Parser[Exp] = "[" ~> vel <~ "]" ^^
+    { (u:List[Exp]) => new Vex(u) }
+
+  def ves : Parser[List[Exp]] = rep(vex)
+  def mex : Parser[Exp] = "[" ~> ves <~ "]" ^^
+    { (u:List[Exp]) => new Mex(u) }
+
+  // ... func(arg) ln, logb root ...
+  def arg : Parser[Exp] = "(" ~> end <~ ")" // consumes (u) for functions
+  def fun : Parser[Exp] = farg  ~ arg ^^  { case f ~ u  => func(f,u) }
+
+  //def fer : Parser[Exp] = stringLit ~ arg ^^  { case f ~ u  => func(f,u) }
+
+  def farg : Parser[String] =  // Functions with a single argument
+    "sqrt"|"ln"|"log"|"sin"|"cos"|"tan"|"cot"|"sec"|"csc"|
+    "arcsin"|"arccos"|"arctan"|"arccot"|"arcsec"|"arccsc"|"d"
+
+  // Check case where "log" => Lnn(u)
+  def func( f:String, u:Exp ) : Exp = f match
+  {
+    case "sqrt"   => Sqt(u)  case "ln"     => Lnn(u)  case "log"    => Lnn(u)
+    case "sin"    => Sin(u)  case "cos"    => Cos(u)  case "tan"    => Tan(u)
+    case "cot"    => Cot(u)  case "sec"    => Sec(u)  case "csc"    => Csc(u)
+    case "arcsin" => ASin(u) case "arccos" => ACos(u) case "arctan" => ATan(u)
+    case "arccot" => ACot(u) case "arcsec" => ASec(u) case "arccsc" => ACsc(u)
+    case "d"      => Dif(u)
+    case  _       => Msg( Text(50).text( "Ascii.func::", f, '(', u.text, ')', " :: is an unknown function" ) )
+  }
+
+  // log Interpreted as base e same as Ln for other bases use log_b(arg)
+  // e^u should not be a problem since "e" is reserved
+  // ^ not a problem for Int and sum since lim consumes _ a ^ b
+  // def eee : Parser[Exp] = ("e"|Var("e")) ~> "^" ~ end ^^
+  def log : Parser[Exp] = "log"  ~> "_" ~> DBL ~ arg  ^^ { case  b  ~  u => Log(u,b) }
+  def roo : Parser[Exp] = "root" ~> "_" ~> DBL ~ arg  ^^ { case  r  ~  u => Roo(u,r) }
+  def lim : Parser[Exp] = "_" ~ beg ~ "^"  ~ beg      ^^ { case "_" ~  a ~ "^" ~ b => new Lim(a,b) }
+
+  def sum  : Parser[Exp] = ("Int"|"sum") ~ lim ~ arg  ^^
+  {
+    case "sum" ~ Lim(a,b) ~ u => Sum(a,b,u)
+    case "Int" ~ Lim(a,b) ~ u => Itl(a,b,u)
+  }
+
+  def neg : Parser[Exp] = "-" ~ end ^^ { case "-" ~ u => Neg(u) }
+
+  // e is a reserved exponentialion keyword that must be followed by ^
+  // e^u is handled by ee1
+  // e standalone variable is handle by ee2
+  def ee1 : Parser[Exp] =  "e" ~ "^" ~ end  ^^ { case "e" ~ "^" ~ u => Eee(u) }
+  def ee2 : Parser[Exp] =  "e"              ^^ { case "e"           => Var("e") }
+  def eee : Parser[Exp] =  ee1 | ee2
+
+  // d is a reserved differentiation keyword.
+  // dx is handled by variable() converts dx Into Into Dif(Var(x)) fo just a 1 Char variable
+  //   since we have to split a variable string the call by VAR to variable() is needed
+  // d(exp) or differentiation of an expression is handled by dif1
+  // d standalone variable is handled by dif2
+  def dif1 : Parser[Exp] = "d" ~ end ^^ { case "d" ~ u => Dif(u.noparen)   }
+  def dif2 : Parser[Exp] = "d"       ^^ { case "d"     => Var("d") }
+  def dif  : Parser[Exp] =  dif1 | dif2
+
+  // Right now subscript and superscript are a problem with stack overflows
+  // def sus : Parser[Exp] = VAR ~ "_" ~ NUM ^^ { case u ~ "_" ~ v => Sus(u,v) }
+  // def sup : Parser[Exp] = end ~ "^" ~ end ^^ { case u ~ "^" ~ v => Sup(u,v) }
+
+  // ...... Primary (pri) and Production (exp) Parser Rules ......
+
+  def base:Parser[Exp] = NUM | dif | VAR | par | brc | abs | cex | vex | mex
+
+  def oper:Parser[Exp] = fun | log | roo | eee | iii | sum | neg // | sus | sup
+
+  // Everything is an expression (expr) or an equation (equ)
+  def all:Parser[Exp] = end | failure("end")
+
+  def apply( str:String ) : Exp = parse( str )
+
+  def parse( str:String ) : Exp = all( new lexical.Scanner(str) ) match
+  {
+    case Success( exp, _    ) => exp
+    case Failure( msg, trc  ) => Msg( Text(50).text( "Ascii.parse Failure::<", str, ">::", msg  ) )
+    case Error(   msg, trc  ) => Msg( Text(50).text( "Ascii.parse Error::<",   str, ">::", msg  ) )
+    case _                    => Msg( Text(50).text( "Ascii.parse Unknown::<", str, ">::" ) )
+  }
+}
+</code></pre>
+</section>
+
+<section>
+<div style="color:tan;">Best Part - Pattern Matching Traits for Unlimited Extensibility</div>
+<pre class="scala"><code style="font-size:.9em; min-height:4em; line-height:1.1em;">abstract class Exp extends
+  Ascii     with Lambda        with MathML    with Latex   with
+  Calculate with Differentiate with Integrate with Simplify
+</code></pre>
+  <table class="trait" style="font-size:20pt;">
+    <tbody>
+    <tr><th>Trait</th><th>Description</th></tr>
+    <tr><td style="text-align:left; color:#EFEF8F;">Ascii</td><td>AsciiMath Text</td></tr>
+    <tr><td style="text-align:left; color:#EFEF8F;">Lambda</td><td>Case Class Text</td></tr>
+    <tr><td style="text-align:left; color:#EFEF8F;">MathML</td><td>Typeset MathML Markup</td></tr>
+    <tr><td style="text-align:left; color:#EFEF8F;">Latex </td><td>Latex Text</td></tr>
+    <tr><td style="text-align:left; color:#EFEF8F;">Calculate</td><td>Evaluates Math Expressions</td></tr>
+    <tr><td style="text-align:left; color:#EFEF8F;">Differentiate</td><td>Differentiation</td></tr>
+    <tr><td style="text-align:left; color:#EFEF8F;">Integrate</td><td>Integration</td></tr>
+    <tr><td style="text-align:left; color:#EFEF8F;">Simplify</td><td>Simplification</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <div style="color:tan;">MathML</div>
+<pre class="scala"><code style="font-size:.9em; min-height:26em; line-height:1.1em;">trait MathML
+{
+  self:Exp =&gt;
+
+  def mathML( t:Text ) { mathML(t,this) }
+
+  def mathML( t:Text, exp:Exp )
+  {
+    exp match
+    {
+      case Num(n)    =&gt; mathML( t, "mn", n.toString )
+      case Dbl(d)    =&gt; mathML( t, "mn", d.toString )
+      case Rat(n,d)  =&gt; mathML( t, "mfrac", Num(n), Num(d) )
+      case Var(s)    =&gt; mathML( t, "mi", s ) // Syms.entity(t,s)
+      case Add(u,v)  =&gt; mathML( t, "mrow",   u, "+", v )
+      case Sub(u,v)  =&gt; mathML( t, "mrow",   u, "-", v )
+      case Mul(u,v)  =&gt; mathML( t, "mrow",   u, "*", v )
+      case Div(u,v)  =&gt; mathML( t, "mfrac",  u, v )
+      case Rec(u)    =&gt; mathML( t, "mfrac", Num(1), u )
+      case Pow(u,v)  =&gt; mathML( t, "msup",   u, v )
+      case Neg(u)    =&gt; mathML( t, "mo", "-" ); u.mathML(t)
+      case Abs(u)    =&gt; mathML( t, "mo", "|" ); u.mathML(t)
+      case Par(u)    =&gt; mathML( t, "mfence", u )
+      case Brc(u)    =&gt; mathML( t, "mfence", u )
+      case Lnn(u)    =&gt; funcML( t, "ln",  u )
+      case Log(u,b)  =&gt; mathML( t, "msub",  u, b )
+      case Roo(u,r)  =&gt; mathML( t, "mroot", u, r )
+      case Eee(u)    =&gt; mathML( t, "msup", Var("e"), u )
+      case Sqt(u)    =&gt; mathML( t, "msqrt", u )
+      case Sin(u)    =&gt; funcML( t, "sin",  u )
+      case Cos(u)    =&gt; funcML( t, "cos",  u )
+      case Tan(u)    =&gt; funcML( t, "tan",  u )
+      case Csc(u)    =&gt; funcML( t, "csc",  u )
+      case Sec(u)    =&gt; funcML( t, "sec",  u )
+      case Cot(u)    =&gt; funcML( t, "cot",  u )
+      case ASin(u)   =&gt; funcML( t, "arcsin", u )
+      case ACos(u)   =&gt; funcML( t, "arccos", u )
+      case ATan(u)   =&gt; funcML( t, "arctan", u )
+      case ACsc(u)   =&gt; funcML( t, "arccsc", u )
+      case ASec(u)   =&gt; funcML( t, "arcsec", u )
+      case ACot(u)   =&gt; funcML( t, "arcot",  u )
+      case Equ(u,v)  =&gt; mathML( t, "mrow",   u, "=", v )
+      case Dif(u)    =&gt; mathML( t, "mi", "d" ); u.mathML(t)
+      case Sus(u,v)  =&gt; mathML( t, "msub",    u, v )
+      case Sup(u,v)  =&gt; mathML( t, "msup",    u, v )
+      case Lim(u,v)  =&gt; mathML( t, "msupsup", u, v ) // Check
+      case Itg(u)    =&gt; mathML( t, "mo", "&#x222B;" ); u.mathML(t)     // &Int;
+      case Itl(a,b,u)=&gt; operML( t, "msubsup",    "&#x222B;", a, b, u ) // &Int;
+      case Sum(a,b,u)=&gt; operML( t, "munderover", "&#x2211;", a, b, u ) // &Sum;
+      case Cex(r,i)  =&gt; mathMLCex(t,r,i)
+      case Vex(a)    =&gt; mathMLVex(t,a)
+      case Mex(m)    =&gt; mathMLMex(t,m)
+      case Msg(txt:Text) =&gt; t.app(txt)
+    }
+  }
+
+  def mathML( t:Text, tag:String, s:String )
+    { t.app( '&lt;', tag, '&gt;', s, "&lt;/", tag, '&gt;' ) }
+
+  def mathML( t:Text, tag:String, u:Exp )
+    { t.app( '&lt;', tag, '&gt;' ); u.mathML(t); t.app( "&lt;/", tag, '&gt;' ) }
+
+  def funcML( t:Text, func:String, u:Exp )
+  {
+    t.app( '&lt;',  "mrow", '&gt;' )
+    mathML( t, "mi", func )
+    mathML( t, "mfence", u )
+    t.app( "&lt;/", "mrow", '&gt;' )
+  }
+
+  def mathML( t:Text, tag:String, u:Exp, v:Exp )
+  {
+    t.app( '&lt;',  tag,  '&gt;' )
+    u.mathML(t)
+    v.mathML(t)
+    t.app( "&lt;/", tag, '&gt;' )
+  }
+
+  def mathML( t:Text, tag:String, u:Exp, op:String, v:Exp )
+  {
+    t.app( '&lt;',  tag,  '&gt;' )
+    u.mathML(t)
+    mathML( t, "mo", op )
+    v.mathML(t)
+    t.app( "&lt;/", tag, '&gt;' )
+  }
+
+  def operML( t:Text, tag:String, op:String, a:Exp, b:Exp, u:Exp )
+  {
+    t.app( '&lt;',  tag,  '&gt;' )
+    mathML( t, "mo", op )
+    a.mathML(t)
+    b.mathML(t)
+    t.app( "&lt;/", tag, '&gt;' )
+    u.mathML(t)
+  }
+
+def mathMLCex( t:Text, r:Exp, i:Exp )
+  { r.mathML(t); i.mathML(t); t.app("&lt;mi&gt;i&lt;/mi&gt;") }
+
+  def mathMLVex( t:Text, a:Array[Exp] )
+  {
+      t.app( "&lt;mfenced open='[' close=']'&gt;" )
+      for( i &lt;- 0 until a.length )
+        a(i).mathML(t)            // MathML takes care of commas
+      t.app( "&lt;/mfenced&gt;" )
+  }
+
+  def mathMLMex( t:Text, mat:Array[Vex] )
+  {
+    t.app( "&lt;mfenced open='[' close=']'&gt;", "&lt;mtable&gt;" )
+    for( i &lt;- 0 until mat.length )
+    {
+      t.app( "&lt;mtr&gt;" )
+      for( j &lt;- 0 until mat(i).n )
+        { t.app("&lt;mtd&gt;"); mat(i)(j).mathML(t); t.app("&lt;/mtd&gt;") }
+      t.app( "&lt;/mtr&gt;" )
+    }
+    t.app( "&lt;/mtable&gt;", "&lt;/mfenced&gt;" )
+  }
+
+  def headML( t:Text )
+  {
+    t.app( "&lt;?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?&gt;", Text.eol )
+    t.app( "&lt;?xml-stylesheet type=\"text/css\" href=\"MathML.css\" ?&gt;", Text.eol )
+    t.app( "&lt;root xmlns=\"http://www.w3.org/1998/Math/MathML\"&gt;", Text.eol )
+  }
+
+  def begML(  t:Text ) { t.app("&lt;math&gt;") }
+  def endML(  t:Text ) { t.app("&lt;/math&gt;", Text.eol ) }
+  def footML( t:Text ) { t.app("&lt;/root&gt;", Text.eol ) }
+}
+</code></pre>
+</section>
+
+<section>
+  <div style="color:tan;">Simplify</div>
+<pre class="scala"><code style="font-size:.9em; min-height:26em; line-height:1.1em;">trait Simplify
+{
+  self:Exp =>
+
+  def sim : Exp = sim(this)
+
+  def sim( exp:Exp ) : Exp = exp match
+  {
+    case Num(n)    => exp
+    case Dbl(d)    => dbl(d)
+    case Rat(n,d)  => rat(n,d)
+    case Var(s)    => exp
+    case Add(u,v)  => add(noparen(u),noparen(v))
+    case Sub(u,v)  => sub(noparen(u),noparen(v))
+    case Mul(u,v)  => mul(noparen(u),noparen(v))
+    case Div(u,v)  => div(noparen(u),noparen(v))
+    case Pow(u,v)  => pow(noparen(u),noparen(v))
+    case Rec(u)    => rec(u)
+    case Neg(u)    => Neg(sim(u))
+    case Abs(u)    => Abs(sim(u))
+    case Par(u)    => Par(sim(u))
+    case Brc(u)    => Brc(sim(u))
+    case Lnn(u)    => Lnn(sim(u))
+    case Log(u,r)  => Log(sim(u),r)
+    case Roo(u,r)  => Roo(sim(u),r)
+    case Eee(u)    => Eee(sim(u))
+    case Sqt(u)    => Sqt(sim(u))
+    case Sin(u)    => Sin(sim(u))
+    case Cos(u)    => Cos(sim(u))
+    case Tan(u)    => Tan(sim(u))
+    case Csc(u)    => Csc(sim(u))
+    case Sec(u)    => Sec(sim(u))
+    case Cot(u)    => Cot(sim(u))
+    case ASin(u)   => ASin(sim(u))
+    case ACos(u)   => ACos(sim(u))
+    case ATan(u)   => ATan(sim(u))
+    case ACsc(u)   => ACsc(sim(u))
+    case ASec(u)   => ASec(sim(u))
+    case ACot(u)   => ACot(sim(u))
+    case Equ(u,v)  => equ(u,v)
+    case Dif(u)    => Dif(sim(u))
+    case Sus(u,v)  => Sus(sim(u),sim(v))
+    case Sup(u,v)  => Sup(sim(u),sim(v))
+    case Lim(u,v)  => Lim(sim(u),sim(v))
+    case Itg(u)    => Itg(sim(u))
+    case Itl(a,b,u)=> Itl(sim(a),sim(b),sim(u))
+    case Sum(a,b,u)=> Sum(sim(a),sim(b),sim(u))
+    case Cex(r,i)  => Cex( r.sim, i.sim )
+    case Vex(a)    => Vex(exp).map( a => a.sim )
+    case Mex(m)    => Mex(exp).map( m => m.sim )
+    case Msg(t)    => Msg(t)
+  }
+
+  def dbl( r:Double ) : Exp = if(r==r.toInt) Num(r.toInt) else Dbl(r)
+
+  def rat( n:Int, d:Int ) : Exp = (n,d) match
+  {
+    case( 0, d1 ) => Num(0)
+    case( n1, 0 ) => Msg( Text("Num(n1)/Num(0)") )
+    case _        => if(n==d) 1 else Rat(n,d)
+  }
+
+  def mul( u:Exp, v:Exp ) : Exp = (u,v) match
+  {
+    case( u1, Num(1)|Dbl(1.0) ) => sim(u1)
+    case( Num(1)|Dbl(1.0), v1 ) => sim(v1)
+    case( Num(a),   Num(b)    ) => Num(a*b)
+    case( Num(a),   Dbl(b)    ) => Dbl(a*b)
+    case( Dbl(a),   Num(b)    ) => Dbl(a*b)
+    case( Dbl(a),   Dbl(b)    ) => Dbl(a*b)
+    case( q,        Add(a,b)  ) => sim( sim(q)*sim(a)+sim(q)*sim(b) )
+    case( Add(a,b), r         ) => sim( sim(a)*sim(r)+sim(b)*sim(b) )
+    case( q,        Sub(a,b)  ) => sim( sim(q)*sim(a)-sim(u)*sim(b) )
+    case( Sub(a,b), r         ) => sim( sim(a)*sim(r)-sim(b)*sim(b) )
+    case _                      => sim(u)*sim(v)
+  }
+
+  def div( u:Exp, v:Exp ) : Exp = (u,v) match
+  {
+    case( q, Num(1)|Dbl(1.0) ) => sim(q)
+    case( q, Num(0)|Dbl(0.0) ) => Msg(Text("u/Num(0)"))
+    case( Num(a),   Num(b)   ) => Rat(a,b)
+    case( Num(a),   Dbl(b)   ) => Dbl(a/b)
+    case( Dbl(a),   Num(b)   ) => Dbl(a/b)
+    case( Dbl(a),   Dbl(b)   ) => Dbl(a/b)
+    case( Mul(a,b), r        ) => factor(u,r)
+    case( q, Mul(a,b)        ) => factor(q,v)
+    case _ => if(u==v) 1 else sim(u)/sim(v)
+  }
+
+  def factor( u:Exp,  v:Exp ) : Exp = u
+
+  def add( u:Exp, v:Exp ) : Exp = (u,v) match
+  {
+    case( q, Num(0)|Dbl(0.0) ) => sim(q)
+    case( Num(0)|Dbl(0.0), r ) => sim(r)
+    case( Num(a),   Num(b)   ) => Num(a+b)
+    case( Num(a),   Dbl(b)   ) => Dbl(a+b)
+    case( Dbl(a),   Num(b)   ) => Dbl(a+b)
+    case( Dbl(a),   Dbl(b)   ) => Dbl(a+b)
+    case( q,        Neg(b)   ) => sim( sim(q)-sim(b) )
+    case _                     =>      sim(u)+sim(v)
+  }
+
+  def sub( u:Exp, v:Exp ) : Exp = (u,v) match
+  {
+    case( q, Num(0)|Dbl(0.0) ) => sim(q)
+    case( Num(0)|Dbl(0.0), r ) => sim( Neg(r) )
+    case( Num(a),   Num(b)   ) => Num(a-b)
+    case( Num(a),   Dbl(b)   ) => Dbl(a-b)
+    case( Dbl(a),   Num(b)   ) => Dbl(a-b)
+    case( Dbl(a),   Dbl(b)   ) => Dbl(a-b)
+    case( q,        Neg(b)   ) => sim( sim(q)+sim(b) )
+    case _                     => sim(u)-sim(v)
+  }
+
+  def pow( u:Exp, v:Exp ) : Exp = (u,v) match
+  {
+    case( q, Num(1)|Dbl(1.0) ) => sim(q)
+    case( q, Num(0)|Dbl(0.0) ) => 1
+    case( Num(1)|Dbl(1.0), r ) => 1
+    case( Num(0)|Dbl(0.0), r ) => 0
+    case( Num(a),   Num(b)   ) => Dbl(Math.pow(a,b))
+    case( Num(a),   Dbl(b)   ) => Dbl(Math.pow(a,b))
+    case( Dbl(a),   Num(b)   ) => Dbl(Math.pow(a,b))
+    case( Dbl(a),   Dbl(b)   ) => Dbl(Math.pow(a,b))
+    case _                     => sim(u)~^sim(v)
+  }
+
+  def rec( u:Exp ) : Exp = u match
+  {
+    case Num(1) => 1
+    case Num(0) => Msg(Text("Rec(Num(0))"))
+    case Par(a) => Rec(sim(a))
+    case _      => Rec(sim(u))
+  }
+
+  def equ( u:Exp, v:Exp ) : Exp = (u,v) match
+  {
+    case _ => Equ( sim(u), sim(v) )
+  }
+}
+</code></pre>
+</section>
+
+<section>
+  <div style="color:tan;">A Complete Differentiate</div>
+<pre class="scala"><code style="font-size:.9em; min-height:26em; line-height:1.1em;">trait Differentiate
+{
+  self:Exp =>
+
+  def dif : Exp = d(this)  // this.dif
+
+  def d( exp:Exp ) : Exp = exp match
+  {
+    case Num(n)    => 0
+    case Dbl(r)    => 0
+    case Rat(n,d)  => 0
+    case Var(s)    => Dif(Var(s))
+    case Add(u,v)  => d(u) + d(v)
+    case Sub(u,v)  => d(u) - d(v)
+    case Mul(u,v)  =>  v*d(u)+u*d(v)
+    case Div(u,v)  => (v*d(u)-u*d(v)) / v~^2
+    case Rec(u)    => -d(u) / u~^2
+    case Pow(u,v)  => dpow(u,v)
+    case Neg(u)    => -d(u)
+    case Abs(u)    => Abs(d(u))
+    case Par(u)    => Par(d(u))
+    case Brc(u)    => Brc(d(u))
+    case Lnn(u)    => d(u)/u
+    case Log(u,r)  => Log(Ee,r)*d(u)/u
+    case Roo(u,r)  => d(u) / Par( r * Roo(u,r) )
+    case Eee(u)    => Eee(u) * d(u)
+    case Sqt(u)    => d(u) / Par( Sqt(u) * 2 )
+    case Sin(u)    =>   Cos(u) * d(u)
+    case Cos(u)    => -(Sin(u) * d(u))
+    case Tan(u)    => -(Sec(u)~^2  * d(u))
+    case Csc(u)    => -(Csc(u)*Cot(u) * d(u))
+    case Sec(u)    =>   Sec(u)*Tan(u) * d(u)
+    case Cot(u)    => -(Csc(u)~^2  * d(u))
+    case ASin(u)   =>   d(u)/Sqt( 1 - u~^2 )
+    case ACos(u)   => -(d(u)/Sqt( 1 - u~^2 ))
+    case ATan(u)   =>   d(u)/Par( 1 + u~^2 )
+    case ACot(u)   => -(d(u)/Par( 1 + u~^2 ))
+    case ACsc(u)   => -(d(u)/Par(u*Sqt( u~^2 - 1)))
+    case ASec(u)   =>   d(u)/Par(u*Sqt( u~^2 - 1))
+    case Equ(u,v)  => d(u) equ d(v)
+    case Dif(u)    => Dif(Dif(u))
+    case Itg(u)    => u
+    case Itl(q,b,u)=> Itl(q,b,d(u))
+    case Sum(q,b,u)=> Sum(q,b,d(u))
+    case Cex(r,i)  => Cex( r.dif, i.dif )
+    case Vex(a)    => Vex(exp).map( a => a.dif )
+    case Mex(m)    => Mex(exp).map( m => m.dif )
+    case Msg(txt)  => Dif(Msg(txt))
+ // case Sus(u,v)  => Dif(Sub(u,v))
+ // case Sup(u,v)  => Dif(Sup(u,v))
+ // case Lim(u,v)  => Dif(Lim(u,v))
+  }
+
+  def dpow( u:Exp, v:Exp ) : Exp = (u,v) match
+  {
+    case ( u1, Num(0) ) => 0
+    case ( u1, Num(1) ) => d(u1)
+    case ( u1, Num(2) ) => 2 * u1 * d(u)
+    case ( u1, Num(n) ) => n * u1~^(n-1) * d(u1)
+    case ( u1, Dbl(r) ) => r *  1~^(r-1) * d(u1)
+    case ( Num(n), v1 ) => ln(n) * n~^v1 * d(v1)
+    case ( Dbl(r), v1 ) => ln(r) * r~^v1 * d(v1)
+    case _              => v * u~^(v-1)  * d(u) + Lnn(u) * u~^v * d(v)
+  }
+}
+</code></pre>
+</section>
+
+<section>
+  <h2>References</h2>
+  <ul>
+    <li><a href="https://github.com/axiom6/ScalaMathDSL">Scala Math DSL on GitHub (Just Raw Code)</a></li>
+    <li><a href="http://www.scala-lang.org">Scala Language</a></li>
+    <li><a href="http://www1.chapman.edu/~jipsen/mathml/asciimath.html">AsciiMath</a></li>
+    <li><a href="http://www.manning.com/ghosh/">DSLs in Action - Debasish Ghosh</a></li>
+    <li><a href="http://debasishg.blogspot.com/">Debasish Ghosh Blog</a></li>
+    <li><a href="http://ofps.oreilly.com/titles/9780596155957/DomainSpecificLanguages.html">Programming Scala Book DSL Chapter</a></li>
+    <li><a href="http://www.artima.com/shop/programming_in_scala_2ed">Programming in Scala 2rd Ed. Chap.33. Combinator Parsing</a></li>
+    <li><a href="http://www.cs.kuleuven.be/publicaties/rapporten/cw/CW491.pdf‎">Parser Combinators in Scala - Adrian Moor PDF</a></li>
+    <li><a href="http://www.codecommit.com/blog/scala/the-magic-behind-parser-combinators">Parser Combinators - Daniel Spiewak Blog</a></li>
+    <li><a href="http://www.meetup.com/The-Boulder-Area-Scala-Enthusiasts/events/122779302/">Purity, Passion & Prog... by Daniel Spiewak June 27, 2013</a></li>
+    <li><a href="http://www.meetup.com/The-Boulder-Area-Scala-Enthusiasts/">The Boulder Area Scala Enthusiasts</a></li>
+  </ul>
+</section>
+
+<section>
+  <h1>THE END</h1>
+
+</section>
+
+</div>
+
+</div>
+
+<script src="reveal/lib/js/head.min.js"></script>
+<script src="reveal/js/reveal.js"></script>
+<script src="js/ASCIIMathML.js"></script>
+<script>mathcolor="yellow"</script>
+
+<script>
+
+  // Full list of configuration options available here:
+  // https://github.com/hakimel/reveal.js#configuration
+  Reveal.initialize( { controls:true, progress:true, history:true, center:true, // margin: 0.05,
+    theme:      Reveal.getQueryHash().theme,                   // available themes are in /css/theme
+    transition: Reveal.getQueryHash().transition || 'default', // default/cube/page/concave/zoom/linear/fade/none
+    dependencies: [                                            // Optional libraries used to extend on reveal.js
+      { src: 'reveal/lib/js/classList.js',          condition: function() { return !document.body.classList; } },
+      { src: 'reveal/plugin/markdown/showdown.js',  condition: function() { return !!document.querySelector( '[data-markdown]' ); } },
+      { src: 'reveal/plugin/markdown/markdown.js',  condition: function() { return !!document.querySelector( '[data-markdown]' ); } },
+      { src: 'reveal/plugin/zoom-js/zoom.js',       condition: function() { return !!document.body.classList; }, async: true },
+      { src: 'reveal/plugin/notes/notes.js',        condition: function() { return !!document.body.classList; }, async: true },
+      { src: 'reveal/plugin/highlight/highlight.js', callback: function() { hljs.initHighlightingOnLoad();    }, async: true }
+      // { src: 'reveal/plugin/remotes/remotes.js',    condition: function() { return !!document.body.classList; }, async: true }
+    ]
+  });
+
+</script>
+
+
+
+</body>
+</html>
